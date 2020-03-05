@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"io/ioutil"
+	"math/rand"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -578,4 +579,58 @@ func newMatcher(labelSet model.LabelSet) types.Matchers {
 		matchers = append(matchers, types.NewMatcher(key, string(val)))
 	}
 	return matchers
+}
+
+func TestAPI_insertToES(t *testing.T) {
+	groups := []string{"HuaWei", "ALiBaBa", "Tencent", "SHAREit"}
+	severities := []string{"critical", "warning"}
+	alertNames := []string{"the usage rate of container related to kube-admin greater than 80%", "kafka was down"}
+
+	var alerts []*types.Alert
+
+	for i := 0; i < 1000; i++ {
+		ls := model.LabelSet{
+			model.LabelName(model.AlertNameLabel): model.LabelValue(alertNames[rand.Intn(len(alertNames))]),
+			model.LabelName("group"):              model.LabelValue(groups[rand.Intn(len(groups))]),
+			model.LabelName("severity"):           model.LabelValue(severities[rand.Intn(len(severities))]),
+			model.LabelName("value"):              model.LabelValue(fmt.Sprintf("%.2f", rand.Float32()*100)),
+		}
+		alert := &types.Alert{
+			Alert: model.Alert{
+				Labels:      ls,
+				Annotations: nil,
+				StartsAt:    time.Now(),
+				EndsAt:      time.Now(),
+			},
+			Timeout:   false,
+			UpdatedAt: time.Now(),
+		}
+		alerts = append(alerts, alert)
+	}
+
+	// insert into ES
+	apiClient := New(nil, nil, nil, nil, nil, nil)
+	cfg := &config.Config{
+		Global: &config.GlobalConfig{
+			ESEnable:            true,
+			ESAddresses:         []string{"http://127.0.0.1:9200"},
+			ESUserName:          "elastics",
+			ESPassword:          "Alertmanager@2020",
+			ESMaxRetries:        3,
+			ESDisableRetry:      false,
+			ESEnableMetrics:     true,
+			ESEnableDebugLogger: true,
+			ESIndexName:         "alertmanager-alerts",
+			ESIndexRefresh:      "true",
+		},
+		Route: &config.Route{
+			Receiver:   "test",
+			GroupByAll: false,
+		},
+	}
+
+	apiClient.Update(cfg)
+
+	err := apiClient.Batch(alerts...)
+	require.NoError(t, err)
 }

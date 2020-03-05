@@ -651,6 +651,20 @@ type GlobalConfig struct {
 	HWCBaseURL       string `yaml:"hwc_base_url,omitempty"  json:"hwc_base_url,omitempty"`
 	HWCDisplayNumber string `yaml:"hwc_display_number,omitempty"  json:"hwc_display_number,omitempty"`
 	HWCTemplateId    string `yaml:"hwc_template_id,omitempty"  json:"hwc_template_id,omitempty"`
+
+	// ES
+	ESEnable            bool     `yaml:"es_enable,omitempty" json:"es_enable,omitempty"`
+	ESAddresses         []string `yaml:"es_addresses,omitempty" json:"es_addresses,omitempty"`
+	ESUserName          string   `yaml:"es_user_name,omitempty" json:"es_user_name,omitempty"`
+	ESPassword          string   `yaml:"es_password,omitempty" json:"es_password,omitempty"`
+	ESMaxRetries        int      `yaml:"es_max_retries,omitempty" json:"es_max_retries,omitempty"`
+	ESDisableRetry      bool     `yaml:"es_disable_retry,omitempty" json:"es_disable_retry,omitempty"`
+	ESEnableMetrics     bool     `yaml:"es_enable_metrics,omitempty" json:"es_enable_metrics,omitempty"`
+	ESEnableDebugLogger bool     `yaml:"es_enable_debug_logger,omitempty" json:"es_enable_debug_logger,omitempty"`
+
+	// ES index
+	ESIndexName    string `yaml:"es_index_name,omitempty" json:"es_index_name,omitempty"`
+	ESIndexRefresh string `yaml:"es_index_refresh,omitempty" json:"es_index_refresh,omitempty"`
 }
 
 // UnmarshalYAML implements the yaml.Unmarshaler interface for GlobalConfig.

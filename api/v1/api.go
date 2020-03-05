@@ -14,12 +14,15 @@
 package v1
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -29,7 +32,9 @@ import (
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/common/route"
 	"github.com/prometheus/common/version"
+	uuid "github.com/satori/go.uuid"
 
+	"github.com/prometheus/alertmanager/api/es"
 	"github.com/prometheus/alertmanager/api/metrics"
 	"github.com/prometheus/alertmanager/cluster"
 	"github.com/prometheus/alertmanager/config"
@@ -39,6 +44,9 @@ import (
 	"github.com/prometheus/alertmanager/silence"
 	"github.com/prometheus/alertmanager/silence/silencepb"
 	"github.com/prometheus/alertmanager/types"
+
+	"github.com/elastic/go-elasticsearch/v7"
+	"github.com/elastic/go-elasticsearch/v7/esapi"
 )
 
 var corsHeaders = map[string]string{
@@ -75,6 +83,7 @@ type API struct {
 	peer     *cluster.Peer
 	logger   log.Logger
 	m        *metrics.Alerts
+	es       *elasticsearch.Client
 
 	getAlertStatus getAlertStatusFn
 
@@ -138,6 +147,30 @@ func (api *API) Update(cfg *config.Config) {
 
 	api.config = cfg
 	api.route = dispatch.NewRoute(cfg.Route, nil)
+
+	// Create ES client
+	if cfg.Global.ESEnable {
+		esClient, err := elasticsearch.NewClient(elasticsearch.Config{
+			Addresses:         cfg.Global.ESAddresses,
+			Username:          cfg.Global.ESUserName,
+			Password:          cfg.Global.ESPassword,
+			DisableRetry:      cfg.Global.ESDisableRetry,
+			MaxRetries:        cfg.Global.ESMaxRetries,
+			EnableMetrics:     cfg.Global.ESEnableMetrics,
+			EnableDebugLogger: cfg.Global.ESEnableDebugLogger,
+		})
+		if err != nil {
+			level.Error(api.logger).Log("msg", "Create ES client error", "err", err)
+		} else {
+			// Ping
+			_, pingError := esClient.Ping()
+			if pingError == nil {
+				api.es = esClient
+			} else {
+				level.Error(api.logger).Log("msg", "Ping ES service error", "err", pingError)
+			}
+		}
+	}
 }
 
 type errorType string
@@ -392,6 +425,7 @@ func alertMatchesFilterLabels(a *model.Alert, matchers []*labels.Matcher) bool {
 	return matchFilterLabels(matchers, sms)
 }
 
+// addAlerts receives alerts from HTTP request
 func (api *API) addAlerts(w http.ResponseWriter, r *http.Request) {
 	var alerts []*types.Alert
 	if err := api.receive(r, &alerts); err != nil {
@@ -403,6 +437,67 @@ func (api *API) addAlerts(w http.ResponseWriter, r *http.Request) {
 	}
 
 	api.insertAlerts(w, r, alerts...)
+}
+
+// insert inserts all alert that are valid to ES. Because the function is extra, so only print logs when error occurs
+func (api *API) Insert(alerts ...*types.Alert) error {
+	var total int
+	for _, alert := range alerts {
+		esAlert := es.Convert(alert)
+		dataInBytes, err := json.Marshal(esAlert)
+		if err != nil {
+			total = total + 1
+			level.Error(api.logger).Log("msg", "Marshal alerts to string error", "err", err)
+			continue
+		}
+		req := esapi.IndexRequest{
+			Index:      api.config.Global.ESIndexName,
+			DocumentID: uuid.NewV4().String(),
+			Body:       strings.NewReader(string(dataInBytes)),
+			Refresh:    api.config.Global.ESIndexRefresh,
+		}
+
+		_, err = req.Do(context.Background(), api.es)
+		if err != nil {
+			total = total + 1
+			level.Error(api.logger).Log("msg", "Insert alerts to ES error", "err", err)
+			continue
+		}
+		// maybe do something
+	}
+
+	if total > 0 {
+		return level.Error(api.logger).Log("msg", "There are several errors", "total", total)
+	}
+
+	return nil
+}
+
+func (api *API) Batch(alerts ...*types.Alert) error {
+	var buf bytes.Buffer
+	for _, alert := range alerts {
+		esAlert := es.Convert(alert)
+
+		metadata := []byte(fmt.Sprintf(`{ "index" : { "_id" : "%s" } }%s`, uuid.NewV4().String(), "\n"))
+		data, err := json.Marshal(esAlert)
+		if err != nil {
+			level.Error(api.logger).Log("msg", "Marshal ESAlerts to string error", "err", err)
+			continue
+		}
+
+		data = append(data, "\n"...)
+		buf.Grow(len(metadata) + len(data))
+		buf.Write(metadata)
+		buf.Write(data)
+	}
+
+	_, err := api.es.Bulk(bytes.NewReader(buf.Bytes()), api.es.Bulk.WithIndex(api.config.Global.ESIndexName), api.es.Bulk.WithRefresh(api.config.Global.ESIndexRefresh))
+	if err != nil {
+		level.Error(api.logger).Log("msg", "doing ES Bulk API error", "err", err)
+		return err
+	}
+
+	return nil
 }
 
 func (api *API) insertAlerts(w http.ResponseWriter, r *http.Request, alerts ...*types.Alert) {
@@ -451,6 +546,11 @@ func (api *API) insertAlerts(w http.ResponseWriter, r *http.Request, alerts ...*
 		}
 		validAlerts = append(validAlerts, a)
 	}
+	// insert alerts to ES
+	if api.es != nil {
+		_ = api.Batch(validAlerts...)
+	}
+
 	if err := api.alerts.Put(validAlerts...); err != nil {
 		api.respondError(w, apiError{
 			typ: errorInternal,

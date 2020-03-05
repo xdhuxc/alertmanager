@@ -3,6 +3,7 @@ module github.com/prometheus/alertmanager
 require (
 	github.com/cenkalti/backoff v0.0.0-20181003080854-62661b46c409
 	github.com/cespare/xxhash v1.1.0
+	github.com/elastic/go-elasticsearch/v7 v7.6.0
 	github.com/go-kit/kit v0.9.0
 	github.com/go-openapi/errors v0.19.2
 	github.com/go-openapi/loads v0.19.2

@@ -14,10 +14,17 @@
 package v2
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
 	"fmt"
+	"github.com/elastic/go-elasticsearch/v7/esapi"
+	"github.com/prometheus/alertmanager/api/es"
+	uuid "github.com/satori/go.uuid"
 	"net/http"
 	"regexp"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -48,6 +55,8 @@ import (
 	"github.com/prometheus/alertmanager/silence"
 	"github.com/prometheus/alertmanager/silence/silencepb"
 	"github.com/prometheus/alertmanager/types"
+
+	"github.com/elastic/go-elasticsearch/v7"
 )
 
 // API represents an Alertmanager API v2
@@ -69,6 +78,7 @@ type API struct {
 
 	logger log.Logger
 	m      *metrics.Alerts
+	es     *elasticsearch.Client
 
 	Handler http.Handler
 }
@@ -140,6 +150,30 @@ func (api *API) Update(cfg *config.Config, setAlertStatus setAlertStatusFn) {
 	api.alertmanagerConfig = cfg
 	api.route = dispatch.NewRoute(cfg.Route, nil)
 	api.setAlertStatus = setAlertStatus
+
+	// Create ES client
+	if cfg.Global.ESEnable {
+		esClient, err := elasticsearch.NewClient(elasticsearch.Config{
+			Addresses:         cfg.Global.ESAddresses,
+			Username:          cfg.Global.ESUserName,
+			Password:          cfg.Global.ESPassword,
+			DisableRetry:      cfg.Global.ESDisableRetry,
+			MaxRetries:        cfg.Global.ESMaxRetries,
+			EnableMetrics:     cfg.Global.ESEnableMetrics,
+			EnableDebugLogger: cfg.Global.ESEnableDebugLogger,
+		})
+		if err != nil {
+			level.Error(api.logger).Log("msg", "Create ES client error", "err", err)
+		} else {
+			// Ping
+			_, pingError := esClient.Ping()
+			if pingError == nil {
+				api.es = esClient
+			} else {
+				level.Error(api.logger).Log("msg", "Ping ES service error", "err", pingError)
+			}
+		}
+	}
 }
 
 func (api *API) getStatusHandler(params general_ops.GetStatusParams) middleware.Responder {
@@ -281,6 +315,67 @@ func (api *API) getAlertsHandler(params alert_ops.GetAlertsParams) middleware.Re
 	return alert_ops.NewGetAlertsOK().WithPayload(res)
 }
 
+// insert inserts all alert that are valid to ES. Because the function is extra, so only print logs when error occurs
+func (api *API) Insert(alerts ...*types.Alert) error {
+	var total int
+	for _, alert := range alerts {
+		esAlert := es.Convert(alert)
+		dataInBytes, err := json.Marshal(esAlert)
+		if err != nil {
+			total = total + 1
+			level.Error(api.logger).Log("msg", "Marshal alerts to string error", "err", err)
+			continue
+		}
+		req := esapi.IndexRequest{
+			Index:      api.alertmanagerConfig.Global.ESIndexName,
+			DocumentID: uuid.NewV4().String(),
+			Body:       strings.NewReader(string(dataInBytes)),
+			Refresh:    api.alertmanagerConfig.Global.ESIndexRefresh,
+		}
+
+		_, err = req.Do(context.Background(), api.es)
+		if err != nil {
+			total = total + 1
+			level.Error(api.logger).Log("msg", "Insert alerts to ES error", "err", err)
+			continue
+		}
+		// maybe do something
+	}
+
+	if total > 0 {
+		return level.Error(api.logger).Log("msg", "There are several errors", "total", total)
+	}
+
+	return nil
+}
+
+func (api *API) Batch(alerts ...*types.Alert) error {
+	var buf bytes.Buffer
+	for _, alert := range alerts {
+		esAlert := es.Convert(alert)
+
+		metadata := []byte(fmt.Sprintf(`{ "index" : { "_id" : "%s" } }%s`, uuid.NewV4().String(), "\n"))
+		data, err := json.Marshal(esAlert)
+		if err != nil {
+			level.Error(api.logger).Log("msg", "Marshal ESAlerts to string error", "err", err)
+			continue
+		}
+
+		data = append(data, "\n"...)
+		buf.Grow(len(metadata) + len(data))
+		buf.Write(metadata)
+		buf.Write(data)
+	}
+
+	_, err := api.es.Bulk(bytes.NewReader(buf.Bytes()), api.es.Bulk.WithIndex(api.alertmanagerConfig.Global.ESIndexName), api.es.Bulk.WithRefresh(api.alertmanagerConfig.Global.ESIndexRefresh))
+	if err != nil {
+		level.Error(api.logger).Log("msg", "doing ES Bulk API error", "err", err)
+		return err
+	}
+
+	return nil
+}
+
 func (api *API) postAlertsHandler(params alert_ops.PostAlertsParams) middleware.Responder {
 	alerts := openAPIAlertsToAlerts(params.Alerts)
 	now := time.Now()
@@ -328,6 +423,12 @@ func (api *API) postAlertsHandler(params alert_ops.PostAlertsParams) middleware.
 		}
 		validAlerts = append(validAlerts, a)
 	}
+
+	// insert alerts to ES
+	if api.es != nil {
+		_ = api.Batch(validAlerts...)
+	}
+
 	if err := api.alerts.Put(validAlerts...); err != nil {
 		level.Error(api.logger).Log("msg", "failed to create alerts", "err", err)
 		return alert_ops.NewPostAlertsInternalServerError().WithPayload(err.Error())
