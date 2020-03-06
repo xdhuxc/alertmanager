@@ -47,7 +47,12 @@ func Convert(alert *types.Alert) *Alert {
 	esls := make(LabelSet)
 	for k, v := range alert.Labels {
 		if k == labelNameValue {
-			esls[k], _ = strconv.ParseFloat(fmt.Sprintf("%s", v), 32)
+			result, err := strconv.ParseFloat(fmt.Sprintf("%s", v), 32)
+			if err != nil {
+				esls[k] = v
+			} else {
+				esls[k] = result
+			}
 		} else {
 			esls[k] = v
 		}

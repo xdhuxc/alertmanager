@@ -581,8 +581,34 @@ func newMatcher(labelSet model.LabelSet) types.Matchers {
 	return matchers
 }
 
-func TestAPI_insertToES(t *testing.T) {
-	groups := []string{"HuaWei", "ALiBaBa", "Tencent", "SHAREit"}
+func newAPIClient() *API {
+	apiClient := New(nil, nil, nil, nil, nil, nil)
+	cfg := &config.Config{
+		Global: &config.GlobalConfig{
+			ESEnable:            true,
+			ESAddresses:         []string{"http://127.0.0.1:9200"},
+			ESUserName:          "elastics",
+			ESPassword:          "Alertmanager@2020",
+			ESMaxRetries:        3,
+			ESDisableRetry:      false,
+			ESEnableMetrics:     true,
+			ESEnableDebugLogger: true,
+			ESIndexName:         "alertmanager-alerts",
+			ESIndexRefresh:      "true",
+		},
+		Route: &config.Route{
+			Receiver:   "test",
+			GroupByAll: false,
+		},
+	}
+
+	apiClient.Update(cfg)
+
+	return apiClient
+}
+
+func generateAlerts() []*types.Alert {
+	groups := []string{"A", "B", "C", "D"}
 	severities := []string{"critical", "warning"}
 	alertNames := []string{"the usage rate of container related to kube-admin greater than 80%", "kafka was down"}
 
@@ -608,28 +634,20 @@ func TestAPI_insertToES(t *testing.T) {
 		alerts = append(alerts, alert)
 	}
 
-	// insert into ES
-	apiClient := New(nil, nil, nil, nil, nil, nil)
-	cfg := &config.Config{
-		Global: &config.GlobalConfig{
-			ESEnable:            true,
-			ESAddresses:         []string{"http://127.0.0.1:9200"},
-			ESUserName:          "elastics",
-			ESPassword:          "Alertmanager@2020",
-			ESMaxRetries:        3,
-			ESDisableRetry:      false,
-			ESEnableMetrics:     true,
-			ESEnableDebugLogger: true,
-			ESIndexName:         "alertmanager-alerts",
-			ESIndexRefresh:      "true",
-		},
-		Route: &config.Route{
-			Receiver:   "test",
-			GroupByAll: false,
-		},
-	}
+	return alerts
+}
 
-	apiClient.Update(cfg)
+func TestAPI_Insert(t *testing.T) {
+	apiClient := newAPIClient()
+	alerts := generateAlerts()
+
+	err := apiClient.Insert(alerts...)
+	require.NoError(t, err)
+}
+
+func TestAPI_Batch(t *testing.T) {
+	apiClient := newAPIClient()
+	alerts := generateAlerts()
 
 	err := apiClient.Batch(alerts...)
 	require.NoError(t, err)
