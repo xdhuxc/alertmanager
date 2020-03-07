@@ -45,6 +45,9 @@ func Convert(alert *types.Alert) *Alert {
 	esAlert.Timeout = alert.Timeout
 	esAlert.UpdatedAt = alert.UpdatedAt
 	esls := make(LabelSet)
+	// It is not suitable to convert all string values to numeric here,
+	// there may be different alert using the same key, but the value types are different.
+	// When creating an index in ES, an error will occur due to the type
 	for k, v := range alert.Labels {
 		if k == labelNameValue {
 			result, err := strconv.ParseFloat(fmt.Sprintf("%s", v), 32)
