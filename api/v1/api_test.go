@@ -586,9 +586,9 @@ func newAPIClient() *API {
 	cfg := &config.Config{
 		Global: &config.GlobalConfig{
 			ESEnable:            true,
-			ESAddresses:         []string{"http://127.0.0.1:9200"},
-			ESUserName:          "elastics",
-			ESPassword:          "Alertmanager@2020",
+			ESAddresses:         []string{"http://10.20.13.158:9200"},
+			ESUserName:          "elastic",
+			ESPassword:          "Shareit@2020",
 			ESMaxRetries:        3,
 			ESDisableRetry:      false,
 			ESEnableMetrics:     true,
@@ -608,13 +608,14 @@ func newAPIClient() *API {
 }
 
 func generateAlerts() []*types.Alert {
-	groups := []string{"A", "B", "C", "D"}
-	severities := []string{"critical", "warning"}
-	alertNames := []string{"the usage rate of container related to kube-admin greater than 80%", "kafka was down"}
+	groups := []string{"SGT", "BDP", "CBS", "RST", "UO", "IM", "CO", "UGS", "Web", "ADS", "SBS"}
+	severities := []string{"critical", "emergency", "warning"}
+	alertNames := []string{"kube-admin相关容器内存使用率大于80%", "kafka未消费消息量超过6000万", "k8s集群内存分配率大于85%", "ERROR-kafka outbound 小于 500KB", "coredns解析延时过大", "autoscaler task实例组数量有偏差"}
 
 	var alerts []*types.Alert
-
-	for i := 0; i < 1000; i++ {
+	rand.Seed(time.Now().UnixNano())
+	for i := 0; i < rand.Intn(5000); i++ {
+		rand.Seed(time.Now().UnixNano())
 		ls := model.LabelSet{
 			model.LabelName(model.AlertNameLabel): model.LabelValue(alertNames[rand.Intn(len(alertNames))]),
 			model.LabelName("group"):              model.LabelValue(groups[rand.Intn(len(groups))]),

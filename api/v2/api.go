@@ -319,7 +319,12 @@ func (api *API) getAlertsHandler(params alert_ops.GetAlertsParams) middleware.Re
 func (api *API) Insert(alerts ...*types.Alert) error {
 	var total int
 	for _, alert := range alerts {
-		esAlert := es.Convert(alert)
+		esAlert, err := es.Convert(alert)
+		if err != nil {
+			level.Error(api.logger).Log("msg", "Convert Alert to ESAlert error", "err", err)
+			continue
+		}
+
 		dataInBytes, err := json.Marshal(esAlert)
 		if err != nil {
 			total = total + 1
@@ -352,7 +357,11 @@ func (api *API) Insert(alerts ...*types.Alert) error {
 func (api *API) Batch(alerts ...*types.Alert) error {
 	var buf bytes.Buffer
 	for _, alert := range alerts {
-		esAlert := es.Convert(alert)
+		esAlert, err := es.Convert(alert)
+		if err != nil {
+			level.Error(api.logger).Log("msg", "Convert Alert to ESAlert error", "err", err)
+			continue
+		}
 
 		metadata := []byte(fmt.Sprintf(`{ "index" : { "_id" : "%s" } }%s`, uuid.NewV4().String(), "\n"))
 		data, err := json.Marshal(esAlert)
